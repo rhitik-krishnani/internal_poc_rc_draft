@@ -3,3 +3,4 @@ fastapi
 pdfplumber
 python-docx
 requests
+python-dotenv
