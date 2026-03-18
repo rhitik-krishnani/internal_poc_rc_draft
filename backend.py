@@ -103,7 +103,7 @@ RULE 4 — MANDATORY EXAMPLE (follow this exact pattern):
 
 Single role at a company:
 <b> Company ABC (Jan 2018 - Dec 2019) </b>
-<b> Role - Software Engineer </b>
+<b> Software Engineer </b>
 <b> Project: Project Alpha </b>
 • Responsibility 1
 • Responsibility 2
@@ -115,7 +115,7 @@ Single role at a company:
 Multiple roles at the same company (company name appears ONLY ONCE):
 <b> Company XYZ (Mar 2020 - Present) </b>
 
-<b> Role - Senior Engineer </b>
+<b> Senior Engineer </b>
 <b> Project: Project Gamma </b>
 • Responsibility 1
 • Responsibility 2
@@ -125,7 +125,7 @@ Multiple roles at the same company (company name appears ONLY ONCE):
 • Responsibility 2
 • Responsibility 3.... and so on.
 
-<b> Role - Junior Engineer </b>
+<b> Junior Engineer </b>
 <b> Project: Project Epsilon </b>
 • Responsibility 1
 • Responsibility 2
@@ -134,7 +134,7 @@ Multiple roles at the same company (company name appears ONLY ONCE):
 Multiple companies (repeat full structure per company):
 <b> Company XYZ (Mar 2020 - Present) </b>
 
-<b> Role - Senior Engineer </b>
+<b> Senior Engineer </b>
 <b> Project: Project Gamma </b>
 • Responsibility 1
 • Responsibility 2
@@ -142,7 +142,7 @@ Multiple companies (repeat full structure per company):
 
 <b> Company ABC (Jan 2018 - Feb 2020) </b>
 
-<b> Role - Analyst </b>
+<b> Analyst </b>
 <b> Project: Project Zeta </b>
 • Responsibility 1
 • Responsibility 2
@@ -358,12 +358,12 @@ def fill_resume_template(response_tag_answers,
 
                 if tag == "1":
                     for run in paragraph.runs:
-                        run.font.size = Pt(20)
+                        run.font.size = Pt(16)
                         run.font.bold = True
                         run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
                 elif tag == "2":
                     for run in paragraph.runs:
-                        run.font.size = Pt(20)
+                        run.font.size = Pt(16)
                         run.font.bold = True
                         run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
                 elif tag == "3":
