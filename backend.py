@@ -54,6 +54,11 @@ Your task is to extract information from the provided resume and populate the te
 4. Do NOT modify tag numbers.
 5. Do NOT skip any tag.
 6. Preserve factual accuracy.
+7. **CRITICAL: DO NOT summarize, condense, abbreviate, or trim ANY information.**
+8. **CRITICAL: Extract FULL, COMPLETE text - word-for-word from the resume.**
+9. **CRITICAL: For Professional Summary and Projects - copy ALL details EXACTLY as written.**
+10. **CRITICAL: Do NOT paraphrase or rewrite. Use original text verbatim.**
+11. **CRITICAL: If information spans multiple lines or is detailed, preserve every word.**
 """
 
     user_prompt = f"""
@@ -72,9 +77,23 @@ Extract information from the resume and populate each tag as per the instruction
 3. Return the answer inside the SAME tag number.
 4. Do NOT change tag numbers.
 5. Do NOT change tag order.
-6. If information for a tag is not available in the resume, leave the tag empty.
+6. **DO NOT summarize or shorten any text.**
+7. **Extract FULL text - every word, every detail, exactly as it appears in the resume.**
+8. If information for a tag is not available in the resume, leave the tag empty.
+
+### PROFESSIONAL SUMMARY - CRITICAL RULES ###
+- Copy the ENTIRE professional summary from the resume word-for-word.
+- Do NOT condense, summarize, or shorten it.
+- Preserve ALL details, formatting, and line breaks.
+- Do NOT paraphrase.
 
 ### PROFESSIONAL EXPERIENCE — STRICT FORMATTING RULES ###
+
+**PRESERVE ALL PROJECT DETAILS - DO NOT TRIM:**
+- Copy ALL project information exactly as written in the resume.
+- Include EVERY responsibility, achievement, and detail.
+- Do NOT abbreviate or summarize project descriptions.
+- Do NOT remove any bullet points or details.
 
 RULE 1 — COMPANY NAME:
 - Print the company name ONLY ONCE — at the very top, before any roles.
@@ -83,10 +102,10 @@ RULE 1 — COMPANY NAME:
 RULE 2 — STRUCTURE ORDER (always follow this exact order):
   1. Company name + timeline
   2. Role title
-  3. Projects under that role (if any)
+  3. Projects under that role (if any) - PRESERVE ALL DETAILS
   4. (blank line)
   5. Next role title (if same company)
-  6. Projects under that role (if any)
+  6. Projects under that role (if any) - PRESERVE ALL DETAILS
   7. (blank line)
   8. Next company name + timeline (if different company) and so on.
 
@@ -111,7 +130,7 @@ Single role at a company:
 <b> Project: Project Beta </b>
 • Responsibility 1
 • Responsibility 2
-• Responsibility 3.... and so on.
+• Responsibility 3.... and so
 Multiple roles at the same company (company name appears ONLY ONCE):
 <b> Company XYZ (Mar 2020 - Present) </b>
 
@@ -168,7 +187,7 @@ Multiple companies (repeat full structure per company):
 - Do NOT include markdown formatting.
 - Do NOT add any text outside the tags.
 - Do NOT repeat instructions in output.
-- Return the fully filled template.
+- **Return the fully filled template with ALL information preserved.**
 - Return valid JSON only.
 """
 
