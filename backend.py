@@ -246,21 +246,46 @@ def safe_parse(response: str):
     try:
         cleaned = response.strip()
 
-        # Remove markdown if present
+        # Remove markdown blocks if present
         cleaned = re.sub(r'^```json\s*', '', cleaned)
         cleaned = re.sub(r'^```\s*', '', cleaned)
         cleaned = re.sub(r'\s*```$', '', cleaned)
 
-        # Fix common JSON issues
-        cleaned = cleaned.replace('\r', '')
-        
-        # IMPORTANT: escape newlines inside JSON
+        # Extract only JSON portion
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end != -1:
+            cleaned = cleaned[start:end+1]
+
+        # Replace raw newlines with escaped newlines
         cleaned = re.sub(r'(?<!\\)\n', '\\n', cleaned)
 
-        return json.loads(cleaned)
+        # Try normal JSON parse
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+
+        # Fallback: fix common quote issues
+        cleaned_fixed = ""
+        in_string = False
+
+        for char in cleaned:
+            if char == '"' and not in_string:
+                in_string = True
+                cleaned_fixed += char
+            elif char == '"' and in_string:
+                in_string = False
+                cleaned_fixed += char
+            elif char == '"' and in_string:
+                cleaned_fixed += '\\"'
+            else:
+                cleaned_fixed += char
+
+        return json.loads(cleaned_fixed)
 
     except Exception as e:
-        print("RAW MODEL RESPONSE (DEBUG):\n", response[:1500])
+        print("\n❌ RAW MODEL RESPONSE (DEBUG):\n", response[:2000])
         raise ValueError(f"Parsing failed: {e}")
 
 
@@ -412,14 +437,38 @@ def fill_resume_template(response_tag_answers,
 def process_resume(pdf_path: str, template_path: str, output_path: str):
     resume_text = extract_resume_text(pdf_path)
     print("---------Extraction of resume text is completed-------------")
+
     system_prompt, user_prompt = get_prompt_for_resume_template_fill(resume_text, template_sample)
     print("---------Extraction of system_prompt, user_prompt is completed-------------")
+
     response = narrate(system_prompt, user_prompt)
     print("---------Extraction of response is completed-------------")
-    parsed = safe_parse(response)
-    if not is_valid_json(parsed):
-        raise ValueError("Invalid JSON returned from model")
+
+    # ✅ RETRY + SAFE PARSE BLOCK
+    for attempt in range(2):
+        try:
+            parsed = safe_parse(response)
+
+            if not is_valid_json(parsed):
+                raise ValueError("Invalid JSON structure")
+
+            break  # success
+
+        except Exception as e:
+            print(f"⚠️ Attempt {attempt+1} failed: {e}")
+
+            # Make prompt stricter
+            user_prompt += "\n\nSTRICT: RETURN ONLY VALID JSON. NO EXTRA TEXT. ESCAPE ALL SPECIAL CHARACTERS."
+
+            response = narrate(system_prompt, user_prompt)
+
+    else:
+        raise ValueError("❌ Failed to parse model response after retries")
+
+    # ✅ Continue normal flow
     fill_resume_template(parsed, template_path, output_path)
+
     print("---------Extraction of response formatting is completed-------------")
     print("---------Saving the generated docx resume file-------------")
+
     return output_path
