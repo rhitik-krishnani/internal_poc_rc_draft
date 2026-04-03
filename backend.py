@@ -55,10 +55,9 @@ Your task is to extract information from the provided resume and populate the te
 5. Do NOT skip any tag.
 6. Preserve factual accuracy.
 7. **CRITICAL: DO NOT summarize, condense, abbreviate, or trim ANY information.**
-8. **CRITICAL: Extract FULL, COMPLETE text - word-for-word from the resume.**
-9. **CRITICAL: For Professional Summary and Projects - copy ALL details EXACTLY as written.**
-10. **CRITICAL: Do NOT paraphrase or rewrite. Use original text verbatim.**
-11. **CRITICAL: If information spans multiple lines or is detailed, preserve every word.**
+8. **CRITICAL: For Professional Summary and Projects - copy ALL details EXACTLY as written.**
+9. **CRITICAL: Do NOT paraphrase or rewrite. Use original text verbatim.**
+10. **CRITICAL: If information spans multiple lines or is detailed, preserve every word.**
 """
 
     user_prompt = f"""
@@ -188,7 +187,15 @@ Multiple companies (repeat full structure per company):
 - Do NOT add any text outside the tags.
 - Do NOT repeat instructions in output.
 - **Return the fully filled template with ALL information preserved.**
-- Return valid JSON only.
+
+### STRICT JSON FORMATTING RULES ###
+
+- Return ONLY valid JSON.
+- All values MUST be enclosed in double quotes.
+- Escape all double quotes inside text using \"
+- Replace all line breaks with \\n
+- Do NOT include raw new lines inside JSON values.
+- Ensure JSON is properly closed and valid.
 """
 
     return system_prompt, user_prompt
@@ -238,24 +245,22 @@ def narrate(system_prompt, user_prompt):
 def safe_parse(response: str):
     try:
         cleaned = response.strip()
+
+        # Remove markdown if present
         cleaned = re.sub(r'^```json\s*', '', cleaned)
         cleaned = re.sub(r'^```\s*', '', cleaned)
         cleaned = re.sub(r'\s*```$', '', cleaned)
 
-        try:
-            return json.loads(cleaned)
-        except Exception:
-            pass
+        # Fix common JSON issues
+        cleaned = cleaned.replace('\r', '')
+        
+        # IMPORTANT: escape newlines inside JSON
+        cleaned = re.sub(r'(?<!\\)\n', '\\n', cleaned)
 
-        try:
-            return ast.literal_eval(cleaned)
-        except Exception:
-            pass
-
-        cleaned_fixed = cleaned.replace('\n', ' ')
-        return json.loads(cleaned_fixed)
+        return json.loads(cleaned)
 
     except Exception as e:
+        print("RAW MODEL RESPONSE (DEBUG):\n", response[:1500])
         raise ValueError(f"Parsing failed: {e}")
 
 
