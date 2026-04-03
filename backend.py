@@ -230,7 +230,7 @@ def narrate(system_prompt, user_prompt):
             "max_tokens": 1024
         }
 
-        response = requests.post(API_URL, headers=headers, json=payload, timeout=60)
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=300)
 
         if response.status_code != 200:
             raise Exception(response.text)
