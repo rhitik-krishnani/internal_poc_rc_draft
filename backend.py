@@ -1,90 +1,258 @@
-import json
-import random
-from textwrap import dedent
-from fastapi import HTTPException
-import docx
-from docx.shared import RGBColor
-from docx import Document
-from datetime import datetime
 import os
-from docx.shared import Pt
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-import pdfplumber
-import requests
+import json
+import asyncio
+import aiohttp
 import re
-import ast
+import pdfplumber
+from datetime import datetime
+from dotenv import load_dotenv
+
+from docx import Document
+from docx.shared import RGBColor, Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 
+try:
+    import streamlit as st
+except:
+    st = None
 
-def extract_resume_text(pdf_path: str) -> str:
-    text = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text.append(page_text)
-    return "\n".join(text)
+load_dotenv()
 
+def get_api_key():
+    try:
+        key = st.secrets.get("HF_API_KEY") if st else None
+    except:
+        key = None
 
-template_sample = {
+    key = key or os.getenv("HF_API_KEY")
+
+    if not key:
+        raise ValueError("HF_API_KEY not found")
+
+    return key
+
+HF_API_KEY = get_api_key()
+
+MODEL = "Qwen/Qwen2.5-72B-Instruct"
+API_URL = "https://router.huggingface.co/v1/chat/completions"
+
+HEADERS = {
+    "Authorization": f"Bearer {HF_API_KEY}",
+    "Content-Type": "application/json"
+}
+
+# =========================================================
+# TEMPLATE
+# =========================================================
+
+TEMPLATE_SAMPLE = {
     "1": "Name",
-    "2": "Designtation or Current Job Title",
-    "3": "Professional Summary capturing overall journey in 4-5 lines",
+    "2": "Designation or Current Job Title",
+    "3": "Professional Summary",
     "4": "Primary Tools",
-    "5": "Cloud & Infrastructure: ",
+    "5": "Cloud & Infrastructure",
     "6": "Other Skills",
     "7": "Professional Experience",
     "8": "Certifications"
 }
 
-
-def get_prompt_for_resume_template_fill(resume_text, template_sample):
-
-    system_prompt = """
-You are an expert resume parsing and structured information extraction system.
-
-Your task is to extract information from the provided resume and populate the template.
-
-### RULES ###
+CORE_RULES = """
+### UNIVERSAL RULES ###
 1. Use ONLY information explicitly present in the resume.
 2. Do NOT invent or infer any information.
 3. Do NOT create new fields.
-4. Do NOT modify tag numbers.
-5. Do NOT skip any tag.
-6. Preserve factual accuracy.
-7. **CRITICAL: DO NOT summarize, condense, abbreviate, or trim ANY information.**
-8. **CRITICAL: For Professional Summary and Projects - copy ALL details EXACTLY as written.**
-9. **CRITICAL: Do NOT paraphrase or rewrite. Use original text verbatim.**
-10. **CRITICAL: If information spans multiple lines or is detailed, preserve every word.**
+4. Preserve factual accuracy.
+5. Output must contain ONLY the filled tags.
+6. Do NOT include explanations.
 """
 
-    user_prompt = f"""
-Extract information from the resume and populate each tag as per the instructions below.
+JSON_RULES = """
+### STRICT JSON FORMATTING RULES ###
+- Return ONLY valid JSON.
+- Escape all double quotes.
+- Replace new lines with \\n
+"""
 
+# =========================================================
+# 🧠 PROMPTS (SAME STRUCTURE - NO CHANGE)
+# =========================================================
+
+def prompt_tag_name(resume_text):
+    """Extract: Name"""
+    system_prompt = """
+You are an expert resume parsing system.
+"""
+    
+    user_prompt = f"""
+### RESUME ###
+{resume_text}
+
+
+### TASK: EXTRACT NAME ###
+- Ensure to follow {CORE_RULES} and {JSON_RULES} without any failure.
+- Extract the candidate's full name.
+- Use ONLY the name as explicitly written in the resume.
+- Do NOT invent or modify names.
+
+Return ONLY this JSON format:
+{{"1": "Full Name Here"}}
+"""
+    
+    return system_prompt, user_prompt
+
+def prompt_tag_designation(resume_text):
+    """Extract: Designation / Current Job Title"""
+    system_prompt = """
+You are an expert resume parsing system.
+"""
+    
+    user_prompt = f"""
+### RESUME ###
+{resume_text}
+
+
+### TASK: EXTRACT DESIGNATION ###
+- Ensure to follow {CORE_RULES} and {JSON_RULES} without any failure.
+- Extract the current or most recent job title/designation.
+- If a "Current Title" or "Designation" section exists, use that.
+- Otherwise, use the most recent job title from Professional Experience.
+- Use ONLY information explicitly present in the resume.
+- Do NOT infer or invent designations.
+
+Return ONLY this JSON format:
+{{"2": "Job Title Here"}}
+"""
+    
+    return system_prompt, user_prompt
+
+def prompt_tag_professional_summary(resume_text):
+    """Extract: Professional Summary (FULL PRESERVATION)"""
+    system_prompt = """
+You are an expert resume parsing and structured information extraction system.
+"""
+    
+    user_prompt = f"""
 ### RESUME RAW TEXT ###
 {resume_text}
 
-### TEMPLATE STRUCTURE ###
-{template_sample}
 
-### INSTRUCTIONS ###
+### TASK: EXTRACT PROFESSIONAL SUMMARY ###
+- Ensure to follow {CORE_RULES} and {JSON_RULES} without any failure.
 
-1. Read the template carefully and identify each numbered tag.
-2. Extract the relevant information from the resume for each tag.
-3. Return the answer inside the SAME tag number.
-4. Do NOT change tag numbers.
-5. Do NOT change tag order.
-6. **DO NOT summarize or shorten any text.**
-7. **Extract FULL text - every word, every detail, exactly as it appears in the resume.**
-8. If information for a tag is not available in the resume, leave the tag empty.
+### PROFESSIONAL SUMMARY - RULES ###
+- Extract the complete Professional Summary exactly as written in the resume.
+- Do NOT condense, summarize, shorten, or paraphrase the content.
+- Preserve every word exactly as in the original text.
+- Remove all special symbols, bullets, or characters (such as ➢, •, -, etc.).
+- Present the content in clean paragraph form without changing wording, order, or meaning.
+- If no Professional Summary section exists, return nothing.
+ 
+Return ONLY this JSON format:
+{{"3": "Full Professional Summary Text Here (preserving all original details)"}}
+"""
+    
+    return system_prompt, user_prompt
 
-### PROFESSIONAL SUMMARY - CRITICAL RULES ###
+def prompt_tag_primary_tools(resume_text):
+    """Extract: Primary Tools"""
+    system_prompt = """
+You are an expert resume parsing system.
+"""
+    
+    user_prompt = f"""
+### RESUME ###
+{resume_text}
+
+{CORE_RULES}
+
 - Copy the ENTIRE professional summary from the resume word-for-word.
-- Do NOT condense, summarize, or shorten it.
-- Preserve ALL details, formatting, and line breaks.
-- Do NOT paraphrase.
+- Do NOT condense, summarize, shorten, or paraphrase the content.
+- Preserve every word exactly as in the original text.
+- Remove all special symbols, bullets, or characters (such as ➢, •, -, etc.).
+- Present the content in clean paragraph form without altering wording, sequence, or meaning.
+- If no dedicated Professional Summary section exists, CREATE on in 4-5 lines.
+
+{JSON_RULES}
+
+Return ONLY this JSON format:
+{{"4": "Tool1, Tool2, Tool3... OR • Tool1\\n• Tool2\\n• Tool3..."}}
+"""
+    
+    return system_prompt, user_prompt
+
+def prompt_tag_cloud_and_infrastructure(resume_text):
+    """Extract: Cloud & Infrastructure"""
+    system_prompt = """
+You are an expert resume parsing system.
+"""
+    
+    user_prompt = f"""
+### RESUME ###
+{resume_text}
+
+{CORE_RULES}
+
+### TASK: EXTRACT CLOUD & INFRASTRUCTURE ###
+- Extract cloud platforms and infrastructure tools (e.g., AWS, Azure, GCP, Kubernetes, Docker, etc.).
+- Cloud & Infrastructure tools may appear in "Skills", "Technical Skills", or "Tools" sections.
+- List all cloud platforms and infrastructure tools exactly as written in the resume.
+- Do NOT invent technologies not mentioned.
+- Include services, platforms, and tools related to cloud and infrastructure only.
+- Format: Use bullet points or comma-separated list as originally presented.
+
+{JSON_RULES}
+
+Return ONLY this JSON format:
+{{"5": "AWS, Azure, GCP, Docker... OR • AWS\\n• Docker\\n• Kubernetes..."}}
+"""
+    
+    return system_prompt, user_prompt
+
+def prompt_tag_other_skills(resume_text):
+    """Extract: Other Skills (Non-technical)"""
+    system_prompt = """
+You are an expert resume parsing system.
+"""
+    
+    user_prompt = f"""
+### RESUME ###
+{resume_text}
+
+{CORE_RULES}
+
+### TASK: EXTRACT OTHER SKILLS ###
+- Extract skills that are NOT primary tools, programming languages, or cloud/infrastructure platforms.
+- Examples: Communication, Leadership, Project Management, Data Analysis, Problem Solving, etc.
+- Look for "Skills", "Additional Skills", "Soft Skills", or similar sections.
+- Include all skills not categorized under Primary Tools or Cloud & Infrastructure.
+- Do NOT invent skills not mentioned in the resume.
+- Format: Use bullet points or comma-separated list as originally presented.
+- List all skills exactly as written.
+
+{JSON_RULES}
+
+Return ONLY this JSON format:
+{{"6": "Skill1, Skill2, Skill3... OR • Skill1\\n• Skill2\\n• Skill3..."}}
+"""
+    
+    return system_prompt, user_prompt
+
+def prompt_tag_professional_experience(resume_text):
+    """Extract: Professional Experience (FULL PRESERVATION + STRICT FORMATTING)"""
+    system_prompt = """
+You are an expert resume parsing and structured information extraction system.
+"""
+    
+    user_prompt = f"""
+### RESUME RAW TEXT ###
+{resume_text}
+
+{CORE_RULES}
+
+### TASK: EXTRACT PROFESSIONAL EXPERIENCE ###
 
 ### PROFESSIONAL EXPERIENCE — STRICT FORMATTING RULES ###
 
@@ -93,6 +261,8 @@ Extract information from the resume and populate each tag as per the instruction
 - Include EVERY responsibility, achievement, and detail.
 - Do NOT abbreviate or summarize project descriptions.
 - Do NOT remove any bullet points or details.
+- Do NOT summarize, condense, abbreviate, or trim ANY information.
+- Do NOT paraphrase or rewrite. Use original text verbatim.
 
 RULE 1 — COMPANY NAME:
 - Print the company name ONLY ONCE — at the very top, before any roles.
@@ -108,16 +278,16 @@ RULE 2 — STRUCTURE ORDER (always follow this exact order):
   7. (blank line)
   8. Next company name + timeline (if different company) and so on.
 
-** NOTE - 
-- Timeline will ONLY be mentioned for the Company Name in the Ouput.
-- ENSURE wherever you provide timeline, the format should Timeline mmm-yy like Jan 26 - Oct 25 or Jan-25 - present whichever is applicable. Do not provide tenure anywhere.
+NOTE: 
+- Timeline will ONLY be mentioned for the Company Name in the output.
+- ENSURE wherever you provide timeline, the format should be Timeline mmm-yy like Jan 26 - Oct 25 or Jan-25 - present, whichever is applicable. Do not provide tenure anywhere.
 
 RULE 3 — WRAPPING (CRITICAL TO FOLLOW):
 - Wrap Company Name and Timeline inside <b> tags.
 - Wrap every Role title inside <b> tags. Do NOT include timeline, duration, or pipe symbol (|) in role tags.
 - Wrap every Project name inside <b> tags. Do NOT include timeline, duration, or pipe symbol (|) in project tags.
 
-RULE 4 — MANDATORY EXAMPLE (follow this exact pattern):
+RULE 4 — MANDATORY EXAMPLES (follow this exact pattern):
 
 Single role at a company:
 <b> Company ABC (Jan 2018 - Dec 2019) </b>
@@ -125,11 +295,8 @@ Single role at a company:
 <b> Project: Project Alpha </b>
 • Responsibility 1
 • Responsibility 2
-• Responsibility 3.... and so on.
-<b> Project: Project Beta </b>
-• Responsibility 1
-• Responsibility 2
-• Responsibility 3.... and so
+• Responsibility 3
+
 Multiple roles at the same company (company name appears ONLY ONCE):
 <b> Company XYZ (Mar 2020 - Present) </b>
 
@@ -137,17 +304,15 @@ Multiple roles at the same company (company name appears ONLY ONCE):
 <b> Project: Project Gamma </b>
 • Responsibility 1
 • Responsibility 2
-• Responsibility 3.... and so on.
+
 <b> Project: Project Delta </b>
 • Responsibility 1
 • Responsibility 2
-• Responsibility 3.... and so on.
 
 <b> Junior Engineer </b>
 <b> Project: Project Epsilon </b>
 • Responsibility 1
 • Responsibility 2
-• Responsibility 3.... and so on.
 
 Multiple companies (repeat full structure per company):
 <b> Company XYZ (Mar 2020 - Present) </b>
@@ -156,7 +321,6 @@ Multiple companies (repeat full structure per company):
 <b> Project: Project Gamma </b>
 • Responsibility 1
 • Responsibility 2
-• Responsibility 3.... and so on.
 
 <b> Company ABC (Jan 2018 - Feb 2020) </b>
 
@@ -164,142 +328,148 @@ Multiple companies (repeat full structure per company):
 <b> Project: Project Zeta </b>
 • Responsibility 1
 • Responsibility 2
-• Responsibility 3.... and so on.
 
-- ENSURE NOT to deviate from this structure under any circumstances, else you will be penalized heavily.
+ENSURE NOT to deviate from this structure under any circumstances.
 
-### CERTIFICATIONS — STRICT RULES ###
+{JSON_RULES}
 
-- If certifications are present in the resume, populate the certification tags normally.
-- Each unique certification must be on a new line
-  - Example:
-    • Certification 1
-    • Certification 2
-    • Certification 3.... and so on.
-- If NO certifications are found, return exactly: <missing_certification></missing_certification>
-- Do NOT invent or infer certifications.
-
-### STRICT OUTPUT RULES ###
-
-- Output must contain ONLY the filled tags.
-- Do NOT include explanations.
-- Do NOT include markdown formatting.
-- Do NOT add any text outside the tags.
-- Do NOT repeat instructions in output.
-- **Return the fully filled template with ALL information preserved.**
-
-### STRICT JSON FORMATTING RULES ###
-
-- Return ONLY valid JSON.
-- All values MUST be enclosed in double quotes.
-- Escape all double quotes inside text using \"
-- Replace all line breaks with \\n
-- Do NOT include raw new lines inside JSON values.
-- Ensure JSON is properly closed and valid.
+Return ONLY this JSON format:
+{{"7": "Complete Professional Experience formatted as shown above, with all details preserved"}}
 """
-
+    
     return system_prompt, user_prompt
 
 
-import os
-import streamlit as st
-from dotenv import load_dotenv
+def prompt_tag_certifications(resume_text):
+    """Extract: Certifications (SPECIAL HANDLING)"""
+    system_prompt = """
+You are an expert resume parsing system.
+"""
+    
+    user_prompt = f"""
+### RESUME ###
+{resume_text}
 
-load_dotenv()
+{CORE_RULES}
 
-HF_API_KEY = st.secrets.get("HF_API_KEY") or os.getenv("HF_API_KEY")
+### TASK: EXTRACT CERTIFICATIONS ###
 
-MODEL = "Qwen/Qwen2.5-72B-Instruct"
-API_URL = f"https://router.huggingface.co/v1/chat/completions"
+### CERTIFICATIONS — STRICT RULES ###
+- Extract all certifications, licenses, or credentials from the resume.
+- Look for "Certifications", "Licenses", "Credentials", "Certifications & Awards" sections.
+- Each unique certification must be on a new line.
+- Do NOT invent or infer certifications.
+- Use ONLY certifications explicitly mentioned in the resume.
+- If NO certifications are found in the resume, return EXACTLY: <missing_certification></missing_certification>
+- Preserve certification names exactly as written.
 
-headers = {
-    "Authorization": f"Bearer {HF_API_KEY}",
-    "Content-Type": "application/json"
+Format when certifications exist:
+• Certification 1
+• Certification 2
+• Certification 3
+
+{JSON_RULES}
+
+Return ONLY this JSON format:
+{{"8": "• Certification 1\\n• Certification 2\\n• Certification 3"}} 
+OR if no certifications:
+{{"8": "<missing_certification></missing_certification>"}}
+"""
+    
+    return system_prompt, user_prompt
+
+PROMPT_FUNCTION_MAP = {
+    "1": prompt_tag_name,
+    "2": prompt_tag_designation,
+    "3": prompt_tag_professional_summary,
+    "4": prompt_tag_primary_tools,
+    "5": prompt_tag_cloud_and_infrastructure,
+    "6": prompt_tag_other_skills,
+    "7": prompt_tag_professional_experience,
+    "8": prompt_tag_certifications,
 }
 
+# ---------------- PDF ----------------
 
-def narrate(system_prompt, user_prompt):
+def extract_resume_text(pdf_path):
+    text = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            t = page.extract_text()
+            if t:
+                text.append(t)
+    return "\n".join(text)
+
+# ---------------- PARSER ----------------
+
+def safe_parse(response):
+    cleaned = response.strip()
+    cleaned = re.sub(r'^```json\s*', '', cleaned)
+    cleaned = re.sub(r'^```\s*', '', cleaned)
+    cleaned = re.sub(r'\s*```$', '', cleaned)
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+
+    if start == -1 or end == -1:
+        raise ValueError("Invalid JSON")
+
+    cleaned = cleaned[start:end+1]
+    cleaned = re.sub(r'(?<!\\)\n', '\\n', cleaned)
+
+    return json.loads(cleaned)
+
+# ---------------- API ----------------
+
+async def narrate_async(session, system_prompt, user_prompt, tag):
+    payload = {
+        "model": MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "temperature": 0.0,
+        "max_tokens": 1024
+    }
+
+    async with session.post(API_URL, headers=HEADERS, json=payload) as resp:
+        data = await resp.json()
+        return data["choices"][0]["message"]["content"]
+
+# ---------------- PROCESS ----------------
+
+async def process_tag(session, tag, resume_text):
     try:
-        payload = {
-            "model": MODEL,
-            "messages": [
-                {"role": "system", "content": dedent(system_prompt).strip()},
-                {"role": "user", "content": user_prompt}
-            ],
-            "temperature": 0.0,
-            "max_tokens": 1024
-        }
+        func = PROMPT_FUNCTION_MAP[tag]
+        sp, up = func(resume_text)
+        response = await narrate_async(session, sp, up, tag)
+        parsed = safe_parse(response)
 
-        response = requests.post(API_URL, headers=headers, json=payload, timeout=300)
+        if tag not in parsed:
+            raise ValueError(f"Tag {tag} missing")
 
-        if response.status_code != 200:
-            raise Exception(response.text)
+        return parsed
 
-        result = response.json()
-        return result["choices"][0]["message"]["content"].strip()
+    except:
+        return {tag: ""}
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI model error: {str(e)}")
+async def process_all(resume_text):
+    async with aiohttp.ClientSession() as session:
+        tasks = [
+            process_tag(session, tag, resume_text)
+            for tag in TEMPLATE_SAMPLE.keys()
+        ]
+        results = await asyncio.gather(*tasks)
 
+    return results
 
-def safe_parse(response: str):
-    try:
-        cleaned = response.strip()
+def merge_results(results):
+    final = {}
+    for r in results:
+        final.update(r)
+    return dict(sorted(final.items(), key=lambda x: int(x[0])))
 
-        # Remove markdown blocks if present
-        cleaned = re.sub(r'^```json\s*', '', cleaned)
-        cleaned = re.sub(r'^```\s*', '', cleaned)
-        cleaned = re.sub(r'\s*```$', '', cleaned)
-
-        # Extract only JSON portion
-        start = cleaned.find("{")
-        end = cleaned.rfind("}")
-        if start != -1 and end != -1:
-            cleaned = cleaned[start:end+1]
-
-        # Replace raw newlines with escaped newlines
-        cleaned = re.sub(r'(?<!\\)\n', '\\n', cleaned)
-
-        # Try normal JSON parse
-        try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError:
-            pass
-
-        # Fallback: fix common quote issues
-        cleaned_fixed = ""
-        in_string = False
-
-        for char in cleaned:
-            if char == '"' and not in_string:
-                in_string = True
-                cleaned_fixed += char
-            elif char == '"' and in_string:
-                in_string = False
-                cleaned_fixed += char
-            elif char == '"' and in_string:
-                cleaned_fixed += '\\"'
-            else:
-                cleaned_fixed += char
-
-        return json.loads(cleaned_fixed)
-
-    except Exception as e:
-        print("\n❌ RAW MODEL RESPONSE (DEBUG):\n", response[:2000])
-        raise ValueError(f"Parsing failed: {e}")
-
-
-def is_valid_json(data):
-    if isinstance(data, dict):
-        return True
-    if isinstance(data, str):
-        try:
-            json.loads(data)
-            return True
-        except json.JSONDecodeError:
-            return False
-    return False
-
+# ---------------- DOCX ----------------
 
 def _add_right_tab_stop(paragraph, position_twips=9000):
     p = paragraph._p
@@ -313,77 +483,8 @@ def _add_right_tab_stop(paragraph, position_twips=9000):
     tab.set(qn("w:pos"), str(position_twips))
     tabs.append(tab)
 
-
-def _add_paragraph_after(paragraph, text="", style=None):
-    p = paragraph._p
-    new_p = OxmlElement("w:p")
-    p.addnext(new_p)
-    new_paragraph = Paragraph(new_p, paragraph._parent)
-    if style is not None:
-        new_paragraph.style = style
-    if text:
-        run = new_paragraph.add_run(text)
-        run.font.name = "Calibri"
-    return new_paragraph
-
-
-def fill_resume_template(response_tag_answers,
-                         template_path="resume_template_sample.docx",
-                         output_file="generated_resume.docx"):
-
+def fill_resume_template(response_tag_answers, template_path, output_file):
     doc = Document(template_path)
-
-    def parse_text_with_tags(paragraph, text, current_tag=None):
-        paragraph.clear()
-
-        while text:
-            if "<b>" in text and "</b>" in text and text.index("<b>") < text.index("</b>"):
-                start = text.index("<b>")
-                end = text.index("</b>")
-
-                before = text[:start]
-                bold_text = text[start + 3:end]
-
-                if before:
-                    run = paragraph.add_run(before)
-                    run.font.name = "Calibri"
-
-                if "(" in bold_text and ")" in bold_text:
-                    open_idx = bold_text.rfind("(")
-                    close_idx = bold_text.rfind(")")
-                    if open_idx != -1 and close_idx != -1 and close_idx > open_idx:
-                        company_part = bold_text[:open_idx].strip()
-                        timeline_part = bold_text[open_idx + 1:close_idx].strip()
-
-                        if company_part and timeline_part:
-                            _add_right_tab_stop(paragraph)
-
-                            left_run = paragraph.add_run(company_part + "\t")
-                            left_run.font.name = "Calibri"
-                            left_run.font.bold = True
-
-                            right_run = paragraph.add_run(timeline_part)
-                            right_run.font.name = "Calibri"
-                            right_run.font.bold = True
-                        else:
-                            run = paragraph.add_run(bold_text)
-                            run.font.name = "Calibri"
-                            run.font.bold = True
-                    else:
-                        run = paragraph.add_run(bold_text)
-                        run.font.name = "Calibri"
-                        run.font.bold = True
-                else:
-                    run = paragraph.add_run(bold_text)
-                    run.font.name = "Calibri"
-                    run.font.bold = True
-
-                text = text[end + 4:]
-            else:
-                if text:
-                    run = paragraph.add_run(text)
-                    run.font.name = "Calibri"
-                break
 
     for paragraph in doc.paragraphs:
         text = paragraph.text
@@ -393,82 +494,24 @@ def fill_resume_template(response_tag_answers,
             end_tag = f"</{tag}>"
 
             if start_tag in text and end_tag in text:
-                new_text = value
-
-                if tag == "6":
-                    for prefix in ["Other Skills:", "Soft Skills:", "Domain Experience:"]:
-                        new_text = new_text.replace(prefix, "")
-                    new_text = " ".join(new_text.split())
-
-                text = text.replace(f"{start_tag}{end_tag}", new_text)
-                text = text.replace(f"{start_tag} {end_tag}", new_text)
-
-                parse_text_with_tags(paragraph, text, current_tag=tag)
-
-                if tag == "1":
-                    for run in paragraph.runs:
-                        run.font.size = Pt(16)
-                        run.font.bold = True
-                        run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
-                elif tag == "2":
-                    for run in paragraph.runs:
-                        run.font.size = Pt(16)
-                        run.font.bold = True
-                        run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
-                elif tag == "3":
-                    paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-
-                break
-
-    for paragraph in doc.paragraphs:
-        if "<missing_certification>" in paragraph.text:
-            p = paragraph._element
-            prev = p.getprevious()
-
-            p.getparent().remove(p)
-            if prev is not None:
-                prev.getparent().remove(prev)
-            break
+                paragraph.text = text.replace(f"{start_tag}{end_tag}", value)
 
     doc.save(output_file)
-    print("Resume generated at Time:", datetime.now())
 
+# ---------------- MAIN ----------------
 
-def process_resume(pdf_path: str, template_path: str, output_path: str):
-    resume_text = extract_resume_text(pdf_path)
-    print("---------Extraction of resume text is completed-------------")
+async def run_pipeline(pdf_path, template_path, output_path):
+    text = extract_resume_text(pdf_path)
+    results = await process_all(text)
+    merged = merge_results(results)
 
-    system_prompt, user_prompt = get_prompt_for_resume_template_fill(resume_text, template_sample)
-    print("---------Extraction of system_prompt, user_prompt is completed-------------")
+    fill_resume_template(
+        response_tag_answers=merged,
+        template_path=template_path,
+        output_file=output_path
+    )
 
-    response = narrate(system_prompt, user_prompt)
-    print("---------Extraction of response is completed-------------")
+# ---------------- WRAPPER (IMPORTANT FIX) ----------------
 
-    # ✅ RETRY + SAFE PARSE BLOCK
-    for attempt in range(2):
-        try:
-            parsed = safe_parse(response)
-
-            if not is_valid_json(parsed):
-                raise ValueError("Invalid JSON structure")
-
-            break  # success
-
-        except Exception as e:
-            print(f"⚠️ Attempt {attempt+1} failed: {e}")
-
-            # Make prompt stricter
-            user_prompt += "\n\nSTRICT: RETURN ONLY VALID JSON. NO EXTRA TEXT. ESCAPE ALL SPECIAL CHARACTERS."
-
-            response = narrate(system_prompt, user_prompt)
-
-    else:
-        raise ValueError("❌ Failed to parse model response after retries")
-
-    # ✅ Continue normal flow
-    fill_resume_template(parsed, template_path, output_path)
-
-    print("---------Extraction of response formatting is completed-------------")
-    print("---------Saving the generated docx resume file-------------")
-
-    return output_path
+def process_resume(pdf_path, template_path, output_path):
+    asyncio.run(run_pipeline(pdf_path, template_path, output_path))
