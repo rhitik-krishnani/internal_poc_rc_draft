@@ -5,20 +5,15 @@ from backend import process_resume
 
 st.set_page_config(page_title="AI Resume Parser", layout="centered")
 
-st.title("📄 AI Resume Parser")
-st.write("Upload your resume and get a structured version instantly.")
+st.title("AI Resume Parser")
 
-st.warning("⚠️ Note: Resumes containing images are NOT supported yet. This will be available in the next release.")
-
-uploaded_file = st.file_uploader("Upload Resume (PDF only)", type=["pdf"])
+uploaded_file = st.file_uploader("Upload Resume (PDF)", type=["pdf"])
 
 TEMPLATE_PATH = "resume_template_sample.docx"
 
-if uploaded_file is not None:
-    st.success("✅ File uploaded successfully!")
-
+if uploaded_file:
     if st.button("Generate Resume"):
-        with st.spinner("Processing your resume..."):
+        with st.spinner("Processing..."):
             with tempfile.TemporaryDirectory() as tmpdir:
                 pdf_path = os.path.join(tmpdir, uploaded_file.name)
                 output_path = os.path.join(tmpdir, "generated_resume.docx")
@@ -30,14 +25,12 @@ if uploaded_file is not None:
                     process_resume(pdf_path, TEMPLATE_PATH, output_path)
 
                     with open(output_path, "rb") as f:
-                        docx_bytes = f.read()
-
-                    st.download_button(
-                        label="⬇️ Download Generated Resume",
-                        data=docx_bytes,
-                        file_name="generated_resume.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    )
+                        st.download_button(
+                            label="Download Resume",
+                            data=f,
+                            file_name="generated_resume.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        )
 
                 except Exception as e:
-                    st.error(f"Error processing resume: {str(e)}")
+                    st.error(str(e))
